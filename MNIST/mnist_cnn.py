@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import random
 
+import matplotlib.pyplot as plt
 
 @dataclass
 class Config:
@@ -33,18 +34,18 @@ class SimpleCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),  # 28x28 → 28x28
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),  # 28x28x1ch → 28x28x32ch
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),                              # 28x28 → 14x14
-            nn.Conv2d(32, 64, kernel_size=3, padding=1), # 14x14 → 14x14
+            nn.Conv2d(32, 64, kernel_size=3, padding=1), # 14x14x32ch → 14x14x64ch
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),                              # 14x14 → 7x7
+            nn.MaxPool2d(2),                              # 14x14x64ch → 7x7x64ch
         )
         self.classifier = nn.Sequential(
-            nn.Flatten(),                  # 64*7*7
-            nn.Linear(64 * 7 * 7, 128),
+            nn.Flatten(),                  # 7x7x64ch = 3136vector
+            nn.Linear(64 * 7 * 7, 128),    # 3136 → 128
             nn.ReLU(inplace=True),
-            nn.Linear(128, 10),
+            nn.Linear(128, 10),            # 128 → 10
         )
 
     def forward(self, x):
@@ -218,6 +219,8 @@ def main():
         acc, loss = evaluate(model, test_loader, device)
         print(f"[EVAL] test_acc={acc*100:.2f}% | test_loss={loss:.4f}")
         predict_some(model, test_loader, device, n=8)
+        # 特徴マップの可視化
+        visualize_feature_maps(model, test_loader, device)
         return
 
     # 学習
@@ -229,6 +232,42 @@ def main():
     print(f"[FINAL] test_acc={acc*100:.2f}% | test_loss={loss:.4f}")
     predict_some(model, test_loader, device, n=8)
 
+@torch.no_grad()
+def visualize_feature_maps(model, loader, device):
+    model.eval()
+    images, labels = next(iter(loader))
+    image = images[0].unsqueeze(0).to(device)  # 1枚取り出す
+
+    # 畳み込み層の出力をフックして保存
+    feature_maps = []
+
+    def hook_fn(module, input, output):
+        feature_maps.append(output.cpu())
+
+    hooks = []
+    for layer in model.features:
+        if isinstance(layer, nn.Conv2d):
+            hooks.append(layer.register_forward_hook(hook_fn))
+
+    # 順伝播
+    _ = model(image)
+
+    # フック解除
+    for h in hooks:
+        h.remove()
+
+    # 可視化
+    for i, fmap in enumerate(feature_maps):
+        num_channels = fmap.shape[1]  # 出力チャンネル数
+        size = min(num_channels, 64)   # 最大64枚だけ表示
+        plt.figure(figsize=(12, 2))
+        for j in range(size):
+            plt.subplot(1, size, j+1)
+            plt.imshow(fmap[0, j].numpy(), cmap="gray")
+            plt.axis("off")
+        plt.suptitle(f"Conv Layer {i+1} Feature Maps")
+    
+    plt.show()
 
 if __name__ == "__main__":
     main()
