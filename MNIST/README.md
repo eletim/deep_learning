@@ -37,7 +37,7 @@ pip install torch torchvision matplotlib
 
 ## 実行
 
-### 学習＆評価＆保存
+### 学習
 python3 mnist_vae.py
 
 ```log
@@ -59,3 +59,22 @@ Epoch 10/10 | train_loss/px: 103.4705 (bce 79.4076 + kld 24.0628) | val_loss/px:
 ### 学習済み重みで生成だけ
 python mnist_vae.py --eval-only --weights runs/vae_best.pt
 
+
+# CVAE
+## 必要パッケージ
+pip install torch torchvision matplotlib
+
+## 実行
+
+### 学習
+python3 mnist_cvae.py
+
+```log
+
+```
+
+### 学習済み重みで、指定クラス（例：7）のみ生成
+python3 mnist_cvae.py --eval-only --weights runs/cvae_best.pt --class 7
+
+### 0〜9 全部を行ごとに並べて生成（各行は同じラベル）
+python3 mnist_cvae.py --eval-only --weights runs/cvae_best.pt --all-classes
