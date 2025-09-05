@@ -7,6 +7,10 @@ import torch.optim as optim
 from torchvision import datasets, transforms, utils
 from torch.utils.data import DataLoader
 
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.manifold import TSNE
+
 # ------------------------------
 # Config
 # ------------------------------
@@ -15,7 +19,7 @@ OUT_DIR = Path("runs")
 Z_DIM = 16          # 潜在次元
 NUM_CLASSES = 10    # MNIST 0-9
 BATCH_SIZE = 128
-EPOCHS = 12
+EPOCHS = 30
 LR = 1e-3
 NUM_WORKERS = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -169,10 +173,10 @@ def train(cvae, train_loader, test_loader, out_dir, epochs):
     opt = optim.Adam(cvae.parameters(), lr=LR)
     best = math.inf
 
-    for ep in range(1, EPOCHS+1):
+    for ep in range(1, epochs+1):
         tr_total, tr_bce, tr_kld = train_epoch(cvae, train_loader, opt)
         val_total = eval_epoch(cvae, test_loader)
-        print(f"Epoch {ep}/{EPOCHS} | train: {tr_total:.4f} (bce {tr_bce:.4f} + kld {tr_kld:.4f}) | val: {val_total:.4f} | device={DEVICE}")
+        print(f"Epoch {ep}/{epochs} | train: {tr_total:.4f} (bce {tr_bce:.4f} + kld {tr_kld:.4f}) | val: {val_total:.4f} | device={DEVICE}")
 
         # ベスト保存
         if val_total < best:
@@ -225,6 +229,49 @@ def save_all_classes_grid(cvae, out_dir, n_per_class=8, fname="cvae_all.png"):
     print(f"[SAVE] {out_dir/fname}  (rows=0..9)")
 
 
+# ---- 潜在ベクトルを集める関数 ----
+@torch.no_grad()
+def collect_latents(model, loader, device, is_conditional=False, num_classes=10):
+    model.eval()
+    Z_list, Y_list = [], []
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+        if is_conditional:
+            # CVAE の場合（既存の one_hot ヘルパを利用）
+            y_onehot = one_hot(y, num_classes)
+            mu, logvar = model.enc(x, y_onehot)
+        else:
+            # VAE の場合
+            mu, logvar = model.enc(x)
+        Z_list.append(mu.cpu())
+        Y_list.append(y.cpu())  # ★ CPU に戻してから蓄積
+    Z = torch.cat(Z_list, dim=0).numpy()
+    Y = torch.cat(Y_list, dim=0).numpy()
+    return Z, Y
+
+# ---- 可視化関数 ----
+def plot_latents(Z, Y, out_path="latent_tsne.png", method="tsne"):
+    if method == "tsne":
+        tsne = TSNE(n_components=2, perplexity=30, learning_rate="auto", init="pca", random_state=42)
+        emb = tsne.fit_transform(Z)
+    elif method == "umap":
+        import umap
+        reducer = umap.UMAP(n_components=2, random_state=42)
+        emb = reducer.fit_transform(Z)
+    else:
+        raise ValueError("method must be 'tsne' or 'umap'")
+
+    plt.figure(figsize=(6,6))
+    scatter = plt.scatter(emb[:,0], emb[:,1], c=Y, s=5, cmap="tab10")
+    plt.colorbar(scatter, ticks=range(10))
+    plt.title(f"Latent space ({method.upper()})")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"[SAVE] {out_path}")
+
+
 # ------------------------------
 # Main
 # ------------------------------
@@ -263,6 +310,11 @@ def main():
     load_weights(cvae, OUT_DIR/"cvae_best.pt")
     save_all_classes_grid(cvae, OUT_DIR, n_per_class=8, fname="cvae_all_final.png")
     save_class_samples(cvae, OUT_DIR, digit=7, n=64, nrow=8, fname="cvae_digit7_final.png")
+
+    Z, Y = collect_latents(cvae, test_loader, DEVICE, is_conditional=True)
+    plot_latents(Z, Y, out_path="runs/cvae_latent_tsne.png", method="tsne")
+    plot_latents(Z, Y, out_path="runs/cvae_latent_umap.png", method="umap")
+
 
 if __name__ == "__main__":
     main()

@@ -8,6 +8,9 @@ from torchvision import datasets, transforms, utils
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.manifold import TSNE
 
 # ------------------------------
 # Config
@@ -209,6 +212,47 @@ def save_latent_traversal(vae, out_dir, steps=8, span=3.0):
     utils.save_image(grid, out_dir/"vae_traverse.png", nrow=steps)
     print(f"[SAVE] {out_dir/'vae_traverse.png'}")
 
+# ---- 潜在ベクトルを集める関数 ----
+@torch.no_grad()
+def collect_latents(model, loader, device, is_conditional=False, num_classes=10):
+    model.eval()
+    Z_list, Y_list = [], []
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+        if is_conditional:
+            # CVAE の場合（既存の one_hot ヘルパを利用）
+            y_onehot = one_hot(y, num_classes)
+            mu, logvar = model.enc(x, y_onehot)
+        else:
+            # VAE の場合
+            mu, logvar = model.enc(x)
+        Z_list.append(mu.cpu())
+        Y_list.append(y.cpu())  # ★ CPU に戻してから蓄積
+    Z = torch.cat(Z_list, dim=0).numpy()
+    Y = torch.cat(Y_list, dim=0).numpy()
+    return Z, Y
+
+# ---- 可視化関数 ----
+def plot_latents(Z, Y, out_path="latent_tsne.png", method="tsne"):
+    if method == "tsne":
+        tsne = TSNE(n_components=2, perplexity=30, learning_rate="auto", init="pca", random_state=42)
+        emb = tsne.fit_transform(Z)
+    elif method == "umap":
+        import umap
+        reducer = umap.UMAP(n_components=2, random_state=42)
+        emb = reducer.fit_transform(Z)
+    else:
+        raise ValueError("method must be 'tsne' or 'umap'")
+
+    plt.figure(figsize=(6,6))
+    scatter = plt.scatter(emb[:,0], emb[:,1], c=Y, s=5, cmap="tab10")
+    plt.colorbar(scatter, ticks=range(10))
+    plt.title(f"Latent space ({method.upper()})")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"[SAVE] {out_path}")
 
 # ------------------------------
 # Main
@@ -239,6 +283,10 @@ def main():
     load_weights(vae, OUT_DIR/"vae_best.pt")
     save_random_samples(vae, OUT_DIR)
     save_latent_traversal(vae, OUT_DIR)
+
+    Z, Y = collect_latents(vae, test_loader, DEVICE, is_conditional=False)
+    plot_latents(Z, Y, out_path="runs/vae_latent_tsne.png", method="tsne")
+    plot_latents(Z, Y, out_path="runs/vae_latent_umap.png", method="umap")
 
 
 if __name__ == "__main__":
