@@ -19,11 +19,12 @@ DATA_DIR = "./data"
 OUT_DIR = Path("runs")
 Z_DIM = 16
 BATCH_SIZE = 128
-EPOCHS = 30
+EPOCHS = 3
 LR = 1e-3
 NUM_WORKERS = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+BETA = 1.0  # β-VAE の β
 
 # ------------------------------
 # VAE（Conv Encoder/Decoder）
@@ -94,12 +95,12 @@ class VAE(nn.Module):
 # ------------------------------
 # Loss（再構成BCE + KLD）
 # ------------------------------
-def vae_loss(xhat, x, mu, logvar):
+def vae_loss(xhat, x, mu, logvar, beta: float = 1.0):
     # 再構成誤差：画素ごとのBCEを総和
     bce = nn.functional.binary_cross_entropy(xhat, x, reduction="sum")
     # KLD：q(z|x) と N(0, I) のKLダイバージェンス
     kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return (bce + kld), bce, kld
+    return (bce + beta * kld), bce, kld
 
 
 # ------------------------------
@@ -134,7 +135,7 @@ def train(vae, train_loader, test_loader, out_dir):
             x = x.to(DEVICE)
             opt.zero_grad()
             xhat, mu, logvar = vae(x)
-            loss, bce, kld = vae_loss(xhat, x, mu, logvar)
+            loss, bce, kld = vae_loss(xhat, x, mu, logvar, beta=BETA)
             loss.backward()
             opt.step()
             total += loss.item()
@@ -148,7 +149,7 @@ def train(vae, train_loader, test_loader, out_dir):
             for x, _ in test_loader:
                 x = x.to(DEVICE)
                 xhat, mu, logvar = vae(x)
-                loss, _, _ = vae_loss(xhat, x, mu, logvar)
+                loss, _, _ = vae_loss(xhat, x, mu, logvar, beta=BETA)
                 val_total += loss.item()
 
         n_train = len(train_loader.dataset)
@@ -254,6 +255,18 @@ def plot_latents(Z, Y, out_path="latent_tsne.png", method="tsne"):
     plt.close()
     print(f"[SAVE] {out_path}")
 
+@torch.no_grad()
+def save_reconstruction_grid(vae, loader, out_dir, n=16):
+    vae.eval()
+    x, _ = next(iter(loader))
+    x = x.to(DEVICE)[:n]
+    mu, logvar = vae.enc(x)
+    xhat = vae.dec(mu)
+    # 上段: 入力, 下段: 再構成
+    grid = torch.cat([x.cpu(), xhat.cpu()], dim=0)
+    utils.save_image(grid, OUT_DIR/"vae_recon.png", nrow=n)
+    print("[SAVE] runs/vae_recon.png")
+
 # ------------------------------
 # Main
 # ------------------------------
@@ -287,6 +300,8 @@ def main():
     Z, Y = collect_latents(vae, test_loader, DEVICE, is_conditional=False)
     plot_latents(Z, Y, out_path="runs/vae_latent_tsne.png", method="tsne")
     plot_latents(Z, Y, out_path="runs/vae_latent_umap.png", method="umap")
+
+    save_reconstruction_grid(vae, test_loader, OUT_DIR)
 
 
 if __name__ == "__main__":
